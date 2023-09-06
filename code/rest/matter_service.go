@@ -1033,7 +1033,7 @@ func (this *MatterService) AtomicRename(request *http.Request, matter *Matter, n
 }
 
 // 将本地文件映射到蓝眼云盘中去。
-func (this *MatterService) AtomicMirror(request *http.Request, srcPath string, destPath string, overwrite bool, user *User, space *Space) {
+func (this *MatterService) AtomicMirror(request *http.Request, srcPath string, destPath string, overwrite bool, user *User, space *Space, isMove bool) {
 
 	if user == nil {
 		panic(result.BadRequest("user cannot be nil"))
@@ -1054,11 +1054,11 @@ func (this *MatterService) AtomicMirror(request *http.Request, srcPath string, d
 		panic(result.BadRequest("dest matter has been deleted. Cannot mirror."))
 	}
 
-	this.mirror(request, srcPath, destDirMatter, overwrite, user, space)
+	this.mirror(request, srcPath, destDirMatter, overwrite, user, space, isMove)
 }
 
 // 将本地文件/文件夹映射到蓝眼云盘中去。
-func (this *MatterService) mirror(request *http.Request, srcPath string, destDirMatter *Matter, overwrite bool, user *User, space *Space) {
+func (this *MatterService) mirror(request *http.Request, srcPath string, destDirMatter *Matter, overwrite bool, user *User, space *Space, isMove bool) {
 
 	if user == nil {
 		panic(result.BadRequest("user cannot be nil"))
@@ -1094,7 +1094,7 @@ func (this *MatterService) mirror(request *http.Request, srcPath string, destDir
 		for _, fileInfo := range fileInfos {
 
 			path := fmt.Sprintf("%s/%s", srcPath, fileInfo.Name())
-			this.mirror(request, path, srcDirMatter, overwrite, user, space)
+			this.mirror(request, path, srcDirMatter, overwrite, user, space, isMove)
 		}
 
 	} else {
@@ -1111,18 +1111,52 @@ func (this *MatterService) mirror(request *http.Request, srcPath string, destDir
 			}
 		}
 
-		//准备直接从本地上传了。
-		file, err := os.Open(srcPath)
-		this.PanicError(err)
-		defer func() {
-			err := file.Close()
+		if isMove {
+			//将本地文件移动上传
+			this.moveWithLocalPath(request, srcPath, user, space, destDirMatter, fileStat.Name(), fileStat.Size())
+		} else {
+			//准备直接从本地上传了。
+			file, err := os.Open(srcPath)
 			this.PanicError(err)
-		}()
+			defer func() {
+				err := file.Close()
+				this.PanicError(err)
+			}()
 
-		this.Upload(request, file, nil, user, space, destDirMatter, fileStat.Name(), true)
-
+			this.Upload(request, file, nil, user, space, destDirMatter, fileStat.Name(), true)
+		}
 	}
 
+}
+
+func (this *MatterService) moveWithLocalPath(request *http.Request, srcPath string, user *User, space *Space, destDirMatter *Matter, filename string, fileSize int64) *Matter {
+	dirAbsolutePath := destDirMatter.AbsolutePath()
+	fileAbsolutePath := dirAbsolutePath + "/" + filename
+
+	if len(filename) > MATTER_NAME_MAX_LENGTH {
+		panic(result.BadRequestI18n(request, i18n.MatterNameLengthExceedLimit, len(filename), MATTER_NAME_MAX_LENGTH))
+	}
+	//check the size limit.
+	if space.SizeLimit >= 0 {
+		if fileSize > space.SizeLimit {
+			panic(result.BadRequestI18n(request, i18n.MatterSizeExceedLimit, util.HumanFileSize(fileSize), util.HumanFileSize(space.SizeLimit)))
+		}
+	}
+	//check total size.
+	if space.TotalSizeLimit >= 0 {
+		if space.TotalSize+fileSize > space.TotalSizeLimit {
+			panic(result.BadRequestI18n(request, i18n.MatterSizeExceedTotalLimit, util.HumanFileSize(space.TotalSize), util.HumanFileSize(space.TotalSizeLimit)))
+		}
+	}
+
+	err := os.Rename(srcPath, fileAbsolutePath)
+	this.PanicError(err)
+	permission := os.FileMode(0755)
+	err = os.Chmod(fileAbsolutePath, permission)
+	this.PanicError(err)
+	this.logger.Info("upload with move %s %v ", filename, util.HumanFileSize(fileSize))
+	matter := this.createNonDirMatter(destDirMatter, filename, fileSize, true, user, space)
+	return matter
 }
 
 // 根据一个文件夹路径，依次创建，找到最后一个文件夹的matter，如果中途出错，返回err. 如果存在了那就直接返回即可。

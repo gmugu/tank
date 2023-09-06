@@ -535,12 +535,13 @@ func (this *MatterController) Mirror(writer http.ResponseWriter, request *http.R
 	srcPath := util.ExtractRequestString(request, "srcPath")
 	destPath := util.ExtractRequestString(request, "destPath")
 	overwrite := util.ExtractRequestOptionalBool(request, "overwrite", false)
+	isMove := util.ExtractRequestOptionalBool(request, "isMove", false)
 
 	user := this.checkUser(request)
 	spaceUuid := util.ExtractRequestOptionalString(request, "spaceUuid", user.SpaceUuid)
 	space := this.spaceService.CheckWritableByUuid(request, user, spaceUuid)
 
-	this.matterService.AtomicMirror(request, srcPath, destPath, overwrite, user, space)
+	this.matterService.AtomicMirror(request, srcPath, destPath, overwrite, user, space, isMove)
 
 	return this.Success(nil)
 
